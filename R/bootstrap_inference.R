@@ -103,7 +103,8 @@ THRESHOLD_FOR_BOOTSTRAP_WARNING_MESSAGE = 0.01
 #' 									is 1 since non-smoothness may not be a common issue.
 #' @param alpha 					Defines the confidence interval size (1 - alpha). Defaults to 0.05.
 #' @param run_bca_bootstrap			Do the BCA bootstrap as well. This takes double the time. It defaults to \code{FALSE}.
-#' @param plot 						Illustrates the estimate, the bootstrap samples and the confidence intervals on a histogram plot. Default to TRUE.
+#' @param display_adversarial_score	The adversarial score records the personalization metric versus the deliberate opposite of the personalization. This does not correspond
+#' 									to any practical situation but it is useful for debugging. Default is \code{FALSE}.
 #' @param num_cores					The number of cores to use in parallel to run the bootstrap samples more rapidly. 
 #' 									Defaults to \code{NULL} which automatically sets it to one if there is one available processor or
 #' 									if there are multiple available processors, the number of available processors save one.   
@@ -148,8 +149,7 @@ THRESHOLD_FOR_BOOTSTRAP_WARNING_MESSAGE = 0.01
 #'  censored = survival_example$censored
 #' 	pte_results = PTE_bootstrap_inference(X, y, censored = censored, 
 #'     	regression_type = "survival", 
-#'         B = 200, 
-#'         y_higher_is_better = FALSE)
+#'         B = 1000)
 #' 	pte_results
 #' }
 #' @export
@@ -170,7 +170,7 @@ PTE_bootstrap_inference = function(X, y,
 		B = 3000,
 		alpha = 0.05,
 		run_bca_bootstrap = FALSE,
-		plot = TRUE,
+		display_adversarial_score = FALSE,
         num_cores = NULL
 	){
 	
@@ -203,7 +203,7 @@ PTE_bootstrap_inference = function(X, y,
 		stop("Your data frame must have a column \"\treatment\" which is an indicator vector of the allocation in the RCT.")
 	}
 	#ensure treatment is a factor variable with levels zero and one
-	if (class(X$treatment) != "numeric" && identical(names(table(X$treatment)), c("0", "1"))){
+	if (!(class(X$treatment) %in% c("numeric", "integer")) && identical(names(table(X$treatment)), c("0", "1"))){
 		stop("Your data frame must have a column \"\treatment\" which is a numeric variable with only two values: \"0\" and \"1\".")
 	}
 	
@@ -293,7 +293,7 @@ PTE_bootstrap_inference = function(X, y,
 	cluster = makeCluster(num_cores)
 	registerDoParallel(cluster)
   
-	boot_list = foreach(b = 1 : B) %dopar% {
+	boot_list = foreach(b = 1 : B, .packages = (.packages())) %dopar% {
 		
     	iter_list = list()
     	iter_list$q_scores = list()
@@ -360,9 +360,9 @@ PTE_bootstrap_inference = function(X, y,
 	est_q_best = mean(q_scores$best)
   
     ##percentile method
-	ci_q_adversarial = c(quantile(q_scores$adversarial, alpha / 2), quantile(q_scores$adversarial, 1 - alpha / 2))
-	ci_q_average = c(quantile(q_scores$average, alpha / 2), quantile(q_scores$average, 1 - alpha / 2))
-	ci_q_best = c(quantile(q_scores$best, alpha / 2), quantile(q_scores$best, 1 - alpha / 2))
+	ci_q_adversarial = c(quantile(q_scores$adversarial, alpha / 2, na.rm = TRUE), quantile(q_scores$adversarial, 1 - alpha / 2, na.rm = TRUE))
+	ci_q_average = c(quantile(q_scores$average, alpha / 2, na.rm = TRUE), quantile(q_scores$average, 1 - alpha / 2, na.rm = TRUE))
+	ci_q_best = c(quantile(q_scores$best, alpha / 2, na.rm = TRUE), quantile(q_scores$best, 1 - alpha / 2, na.rm = TRUE))
   
   
 
@@ -393,7 +393,7 @@ PTE_bootstrap_inference = function(X, y,
 		cutoff_obj = create_cutoffs_for_K_fold_cv(pct_leave_out, n - 1)
 		
 		###leave out data point out and run procedure
-		full_list = foreach(i = 1 : n) %dopar%{
+		full_list = foreach(i = 1 : n, .packages = (.packages())) %dopar%{
 			iter_list = list() 
 			iter_list$bca_q_scores = list()
 			
@@ -475,9 +475,9 @@ PTE_bootstrap_inference = function(X, y,
 		bca_ci_q_best_quantiles = c(pnorm(z0_best + (left_best)/(1 - a_best * left_best)),
 				pnorm(z0_best + (right_best)/(1 - a_best * right_best)))
 		
-		bca_ci_q_adversarial = quantile(q_scores$adversarial, probs = bca_ci_q_adversarial_quantiles)
-		bca_ci_q_average = quantile(q_scores$average, probs = bca_ci_q_average_quantiles)
-		bca_ci_q_best = quantile(q_scores$best, probs = bca_ci_q_best_quantiles)  
+		bca_ci_q_adversarial = quantile(q_scores$adversarial, probs = bca_ci_q_adversarial_quantiles, na.rm = TRUE)
+		bca_ci_q_average = quantile(q_scores$average, probs = bca_ci_q_average_quantiles, na.rm = TRUE)
+		bca_ci_q_best = quantile(q_scores$best, probs = bca_ci_q_best_quantiles, na.rm = TRUE)  
 		
 		
 		##convert back to correctly signed units if y_higher_is_better is false
@@ -500,45 +500,6 @@ PTE_bootstrap_inference = function(X, y,
 			bca_ci_q_average = -bca_ci_q_average[2:1]
 			bca_ci_q_best = -bca_ci_q_best[2:1]
 		}
-	}
-
-	
-	if (plot){
-		if (regression_type == "continuous"){
-			xlab = "I (average response difference)"
-		} else if (regression_type == "survival"){
-			xlab = "I (average median survival difference)"
-		} else if (incidence_metric == "probability_difference"){
-			xlab = "I (average probability difference)"
-		} else if (incidence_metric == "risk_ratio"){
-			xlab = "I (average risk ratio)"
-		} else if (incidence_metric == "odds_ratio"){
-			xlab = "I (average odds ratio)"
-		}
-		#display params
-		min_q = min(q_scores$average, q_scores$best)
-		max_q = max(q_scores$average, q_scores$best)
-		par(mfrow = c(2, 1))
-		#first plot
-		hist(q_scores$average, br = B / 3, xlab = xlab, xlim = c(min_q, max_q), main = "Average I's")
-		abline(v = est_q_average, col = "forestgreen", lwd = 3)
-		abline(v = ci_q_average[1], col = "firebrick3", lwd = 1)
-		abline(v = ci_q_average[2], col = "firebrick3", lwd = 1)
-		if (run_bca_bootstrap){
-			abline(v = bca_ci_q_average[1], col = "dodgerblue3", lwd = 1)
-			abline(v = bca_ci_q_average[2], col = "dodgerblue3", lwd = 1)
-		}
-		abline(v = H_0_mu_equals, col = "gray")
-		#second plot
-		hist(q_scores$best, br = B / 3, xlab = xlab, xlim = c(min_q, max_q), main = "Best I's")
-		abline(v = est_q_best, col = "forestgreen", lwd = 3)
-		abline(v = ci_q_best[1], col = "firebrick3", lwd = 1)
-		abline(v = ci_q_best[2], col = "firebrick3", lwd = 1)
-		if (run_bca_bootstrap){
-			abline(v = bca_ci_q_best[1], col = "dodgerblue3", lwd = 1)
-			abline(v = bca_ci_q_best[2], col = "dodgerblue3", lwd = 1)
-		}
-		abline(v = H_0_mu_equals, col = "gray")
 	}
 	
 	#print a warning message if need be
@@ -579,6 +540,8 @@ PTE_bootstrap_inference = function(X, y,
 	return_obj$ci_q_adversarial = ci_q_adversarial
 	return_obj$ci_q_average = ci_q_average
 	return_obj$ci_q_best = ci_q_best
+	return_obj$display_adversarial_score = display_adversarial_score
+	return_obj$B = B
 	if (run_bca_bootstrap){
 		return_obj$bca_q_scores = bca_q_scores
 	    return_obj$bca_ci_q_adversarial = bca_ci_q_adversarial
