@@ -4,7 +4,8 @@ THRESHOLD_FOR_BOOTSTRAP_WARNING_MESSAGE = 0.01
 #' 
 #' Runs B bootstrap samples using a prespecified model then computes the two I estimates based on cross validation. 
 #' p values of the two I estimates are computed for a given \eqn{H_0: \mu_{I_0} = \mu_0}{H_0: mu_I_0 = mu_0} and 
-#' confidence intervals are provided.
+#' confidence intervals are provided using the basic, percentile methods by default and the BCa method as well 
+#' if desired.
 #' 
 #' @param X 						A \eqn{n \times p}{n x p} dataframe of covariates where one column is labeled "treatment" and it
 #' 									is a binary vector of treatment allocations in the study.
@@ -203,8 +204,11 @@ PTE_bootstrap_inference = function(X, y,
 		stop("Your data frame must have a column \"\treatment\" which is an indicator vector of the allocation in the RCT.")
 	}
 	#ensure treatment is a factor variable with levels zero and one
-	if (!(class(X$treatment) %in% c("numeric", "integer")) && identical(names(table(X$treatment)), c("0", "1"))){
-		stop("Your data frame must have a column \"\treatment\" which is a numeric variable with only two values: \"0\" and \"1\".")
+	if (!(class(X$treatment) %in% c("numeric", "integer"))){
+		stop("Your data frame must have a column \"treatment\" which is a numeric variable.")
+	}
+	if (!(identical(names(table(X$treatment)), c("0", "1")))){
+		stop("Your data frame must have a column \"treatment\" which is a numeric variable with only two values: \"0\" and \"1\".\nRun \"names(table(X$treatment))\" to see the problem.")
 	}
 	
 	n = nrow(X)
@@ -222,6 +226,7 @@ PTE_bootstrap_inference = function(X, y,
 		
 	#create default for model building function - always first order model with interactions
 	if (is.null(personalized_model_build_function)){
+		personalized_model_build_function_default = TRUE
 		personalized_model_build_function = switch(regression_type,
 			continuous = function(Xytrain){ #defalt is OLS regression
 				lm(y ~ . * treatment, 
@@ -238,6 +243,8 @@ PTE_bootstrap_inference = function(X, y,
 					dist = "weibull")
 			}
 		)
+	} else {
+		personalized_model_build_function_default = FALSE
 	}
 
 	#create master dataframe for convenience
@@ -360,12 +367,40 @@ PTE_bootstrap_inference = function(X, y,
 	est_q_best = mean(q_scores$best)
   
     ##percentile method
-	ci_q_adversarial = c(quantile(q_scores$adversarial, alpha / 2, na.rm = TRUE), quantile(q_scores$adversarial, 1 - alpha / 2, na.rm = TRUE))
-	ci_q_average = c(quantile(q_scores$average, alpha / 2, na.rm = TRUE), quantile(q_scores$average, 1 - alpha / 2, na.rm = TRUE))
-	ci_q_best = c(quantile(q_scores$best, alpha / 2, na.rm = TRUE), quantile(q_scores$best, 1 - alpha / 2, na.rm = TRUE))
+	alpha_over_two_quantile_adversarial = quantile(q_scores$adversarial, alpha / 2, na.rm = TRUE)
+	one_minus_alpha_over_two_quantile_adversarial = quantile(q_scores$adversarial, 1 - alpha / 2, na.rm = TRUE)
+	ci_q_adversarial = c(
+		alpha_over_two_quantile_adversarial, 
+		one_minus_alpha_over_two_quantile_adversarial
+	)
+	
+	alpha_over_two_quantile_average = quantile(q_scores$average, alpha / 2, na.rm = TRUE)
+	one_minus_alpha_over_two_quantile_average = quantile(q_scores$average, 1 - alpha / 2, na.rm = TRUE)
+	ci_q_average = c(
+		alpha_over_two_quantile_average, 
+		one_minus_alpha_over_two_quantile_average
+	)
+	
+	alpha_over_two_quantile_best = quantile(q_scores$best, alpha / 2, na.rm = TRUE)
+	one_minus_alpha_over_two_quantile_best = quantile(q_scores$best, 1 - alpha / 2, na.rm = TRUE)
+	ci_q_best = c(
+		alpha_over_two_quantile_best, 
+		one_minus_alpha_over_two_quantile_best
+	)
   
-  
-
+	##basic method  
+	basic_ci_q_adversarial = c(
+		2 * observed_q_scores$adversarial - one_minus_alpha_over_two_quantile_adversarial, 
+		2 * observed_q_scores$adversarial - alpha_over_two_quantile_adversarial	
+	)
+	basic_ci_q_average = c(
+		2 * observed_q_scores$average - one_minus_alpha_over_two_quantile_average, 
+		2 * observed_q_scores$average - alpha_over_two_quantile_average	
+	)
+	basic_ci_q_best = c(
+		2 * observed_q_scores$best - one_minus_alpha_over_two_quantile_best, 
+		2 * observed_q_scores$best - alpha_over_two_quantile_best	
+	)	
 	
 	
 	if (run_bca_bootstrap){
@@ -540,6 +575,9 @@ PTE_bootstrap_inference = function(X, y,
 	return_obj$ci_q_adversarial = ci_q_adversarial
 	return_obj$ci_q_average = ci_q_average
 	return_obj$ci_q_best = ci_q_best
+	return_obj$basic_ci_q_adversarial = basic_ci_q_adversarial
+	return_obj$basic_ci_q_average = basic_ci_q_average
+	return_obj$basic_ci_q_best = basic_ci_q_best
 	return_obj$display_adversarial_score = display_adversarial_score
 	return_obj$B = B
 	if (run_bca_bootstrap){
